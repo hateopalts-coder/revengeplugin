@@ -1,14 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  VoiceBoost · index.ts
 //  - Patches navigator.mediaDevices.getUserMedia to intercept mic streams
-//  - FloatingBoostPanel is rendered as fallback inside Settings.tsx
-//    (root injection removed — caused circular dep crash in Revenge bundler)
+//  - FloatingBoostPanel rendered inside Settings.tsx (no root injection)
+//    Root injection removed: caused circular dep crash in Revenge bundler —
+//    FloatingBoostPanel resolved as undefined at patch fire time, making
+//    React.createElement receive a falsy component → crash.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { React }      from "@vendetta/metro/common";
-import { storage }    from "@vendetta/plugin";
-import { logger }     from "@vendetta";
-import Settings       from "./Settings";
+import { storage }  from "@vendetta/plugin";
+import { logger }   from "@vendetta";
+import Settings     from "./Settings";
 import { engine, DEFAULT_SETTINGS, AudioSettings } from "./utils";
 
 // ── Storage init ─────────────────────────────────────────────────────────────
