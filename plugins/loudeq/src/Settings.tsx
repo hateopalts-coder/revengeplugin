@@ -492,10 +492,13 @@ export function FloatingBoostPanel() {
   ).current;
 
   // ── Register as global singleton ───────────────────────────────────────────
+  // FIX: _panelMounted was never being set to true, causing double-panel
+  // render when Settings page also rendered a fallback FloatingBoostPanel.
   React.useEffect(() => {
     _panelMounted = true;
     _setVisible   = setVisible;
     return () => {
+      // FIX: cleanup — reset flag and only clear _setVisible if it's still ours
       _panelMounted = false;
       if (_setVisible === setVisible) _setVisible = null;
     };
@@ -752,9 +755,11 @@ export default function Settings() {
       </ScrollView>
 
       {/*
-        Render panel here as fallback IF root injection in index.ts failed.
-        If root-injected FloatingBoostPanel already mounted, _panelMounted = true
-        and we skip rendering a second instance.
+        FIX: Render fallback panel ONLY if root injection in index.ts failed
+        (_panelMounted will be true if FloatingBoostPanel already mounted via root).
+        Previously _panelMounted was never set to true inside FloatingBoostPanel's
+        useEffect, causing both the root-injected AND this fallback panel to render
+        simultaneously — resulting in two panels / broken toggle state.
       */}
       {!_panelMounted && <FloatingBoostPanel />}
     </View>
