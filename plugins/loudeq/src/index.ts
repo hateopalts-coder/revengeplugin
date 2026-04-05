@@ -11,6 +11,10 @@ import { after }                   from "@vendetta/patcher";
 import { storage }                 from "@vendetta/plugin";
 import { logger }                  from "@vendetta";
 import Settings                    from "./Settings";
+// FIX: was using runtime require("./Settings") inside the patch callback —
+// Revenge's bundler resolves this as undefined due to circular dep timing,
+// causing "Component is falsy" crash. Import at top level instead.
+import { FloatingBoostPanel }      from "./Settings";
 import { engine, DEFAULT_SETTINGS, AudioSettings } from "./utils";
 
 // ── Storage init ─────────────────────────────────────────────────────────────
@@ -65,6 +69,13 @@ function unpatchGUM(): void {
 let _unpatch: (() => void) | null = null;
 
 function tryInjectRootPanel(): (() => void) | null {
+  // FIX: guard — if FloatingBoostPanel failed to import, skip injection entirely
+  // rather than crashing React with a falsy component argument.
+  if (!FloatingBoostPanel) {
+    logger.warn("[VoiceBoost] FloatingBoostPanel import is falsy — skipping root injection, panel accessible via Settings only");
+    return null;
+  }
+
   // Candidates in order of preference
   const finders = [
     () => findByName("AppTabs", false),
@@ -90,11 +101,14 @@ function tryInjectRootPanel(): (() => void) | null {
 
       const unpatch = after(propKey, target, (_, res: any) => {
         if (!res?.props) return;
-        // Lazy require to avoid circular dep at module load time
-        const { FloatingBoostPanel } = require("./Settings");
-        const panel = React.createElement(FloatingBoostPanel as React.ComponentType, {
-          key: "vb-root-panel",
-        });
+
+        // FIX: double-check at call time too — belt-and-suspenders null guard
+        if (!FloatingBoostPanel) return;
+
+        const panel = React.createElement(
+          FloatingBoostPanel as React.ComponentType,
+          { key: "vb-root-panel" }
+        );
         const ch = res.props.children;
         if (Array.isArray(ch)) {
           ch.push(panel);
