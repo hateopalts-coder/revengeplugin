@@ -1,0 +1,14 @@
+{
+  "name": "VoiceBoost",
+  "description": "🎙️ Real-time mic enhancer — Preamp · Bass EQ · Presence · Overdrive · Gain · Stereo Widener · Compressor. Draggable floating panel.",
+  "authors": [
+    {
+      "name": "hateopalts-coder",
+      "id": "000000000000000000"
+    }
+  ],
+  "main": "src/index.ts",
+  "vendetta": {
+    "icon": "ic_headset_24px"
+  }
+}
