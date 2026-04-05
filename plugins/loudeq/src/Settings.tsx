@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  VoiceBoost · Settings.tsx
-//  All controls live directly in the Settings page — no floating panel, no Modal.
+//  VoiceBoost · Settings.tsx  (no PanResponder, no Modal, no Animated)
+//  All controls via +/- buttons — maximum Revenge compatibility
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { React, ReactNative }              from "@vendetta/metro/common";
@@ -8,190 +8,149 @@ import { useProxy }                        from "@vendetta/storage";
 import { storage }                         from "@vendetta/plugin";
 import { engine, DEFAULT_SETTINGS, AudioSettings } from "./utils";
 
-const {
-  View, Text, Switch, ScrollView,
-  TouchableOpacity, PanResponder,
-  StyleSheet,
-} = ReactNative;
+const { View, Text, Switch, ScrollView, TouchableOpacity, StyleSheet } = ReactNative;
 
-type S = typeof storage & AudioSettings;
-
-// ─── Design tokens ────────────────────────────────────────────────────────────
+// ─── Colors ───────────────────────────────────────────────────────────────────
 const C = {
-  bg:         "#090a11",
-  card:       "#13142a",
-  border:     "rgba(124,58,237,0.32)",
-  borderSub:  "#1e1e35",
-  accent:     "#7c3aed",
-  accentSoft: "rgba(124,58,237,0.12)",
-  text:       "#e4e4f0",
-  textSub:    "#8585a8",
-  textDim:    "#42425a",
-  trackBg:    "#1c1c30",
-  green:      "#22c55e",
-  blue:       "#3b82f6",
-  blueDark:   "#1d4ed8",
-  cyan:       "#0ea5e9",
-  orange:     "#f97316",
-  pink:       "#ec4899",
-  purple:     "#a855f7",
-  red:        "#ef4444",
+  bg:        "#090a11",
+  card:      "#13142a",
+  border:    "rgba(124,58,237,0.32)",
+  borderSub: "#1e1e35",
+  accent:    "#7c3aed",
+  accentSoft:"rgba(124,58,237,0.12)",
+  text:      "#e4e4f0",
+  sub:       "#8585a8",
+  dim:       "#42425a",
+  trackBg:   "#1c1c30",
+  green:     "#22c55e",
+  blue:      "#3b82f6",
+  blueDark:  "#1d4ed8",
+  cyan:      "#0ea5e9",
+  orange:    "#f97316",
+  pink:      "#ec4899",
+  purple:    "#a855f7",
 };
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
+  root:       { flex: 1, backgroundColor: C.bg },
+  scroll:     { flex: 1 },
 
-  // status card
-  statusCard: {
-    margin: 14,
-    padding: 16,
-    borderRadius: 16,
+  // cards
+  card: {
+    marginHorizontal: 14, marginBottom: 12,
+    padding: 14, borderRadius: 14,
     backgroundColor: C.card,
-    borderWidth: 1,
-    borderColor: C.border,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
+    borderWidth: 1, borderColor: C.borderSub,
+  },
+  statusCard: {
+    marginHorizontal: 14, marginBottom: 12, marginTop: 14,
+    padding: 14, borderRadius: 14,
+    backgroundColor: C.card,
+    borderWidth: 1, borderColor: C.border,
+    flexDirection: "row", alignItems: "center", gap: 12,
   },
   statusInfo: { flex: 1 },
-  statusTitle: { color: C.text, fontSize: 18, fontWeight: "800" },
-  statusSub:   { color: C.textSub, fontSize: 12, marginTop: 4 },
+  statusTitle:{ color: C.text, fontSize: 17, fontWeight: "800" },
+  statusSub:  { color: C.sub, fontSize: 12, marginTop: 3 },
 
-  // section
-  section: {
-    marginHorizontal: 14,
-    marginBottom: 14,
-    padding: 14,
-    borderRadius: 14,
-    backgroundColor: C.card,
-    borderWidth: 1,
-    borderColor: C.borderSub,
+  // section label
+  sectionRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12,
   },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 14,
-  },
-  sectionLine: { flex: 1, height: 1, backgroundColor: C.borderSub },
-  sectionLabel: {
-    color: C.textDim,
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 2.5,
-  },
+  sectionLine:  { flex: 1, height: 1, backgroundColor: C.borderSub },
+  sectionLabel: { color: C.dim, fontSize: 9, fontWeight: "700", letterSpacing: 2.5 },
 
-  // slider
-  sliderWrap:  { marginBottom: 14 },
-  sliderHead:  { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
-  sliderLabel: { color: C.textDim, fontSize: 9, fontWeight: "700", letterSpacing: 1.5 },
-  sliderVal:   { color: C.textSub, fontSize: 11, fontWeight: "600" },
-  sliderArea:  { height: 26, justifyContent: "center", position: "relative" },
-  sliderTrack: {
-    position: "absolute", left: 0, right: 0,
-    height: 3, backgroundColor: C.trackBg, borderRadius: 2,
-  },
-  sliderThumb: {
-    position: "absolute",
-    width: 16, height: 16, borderRadius: 8,
-    backgroundColor: "#fff", borderWidth: 2.5,
-    elevation: 4,
-  },
-
-  // toggle
+  // toggle row
   toggleRow: {
     flexDirection: "row", alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 4, marginBottom: 6,
+    justifyContent: "space-between", paddingVertical: 4, marginBottom: 6,
   },
-  toggleLabel: { color: C.textSub, fontSize: 12, fontWeight: "600" },
+  toggleLabel: { color: C.sub, fontSize: 12, fontWeight: "600" },
 
-  // master toggle card
+  // master toggle
   masterCard: {
-    margin: 14,
-    marginBottom: 0,
-    padding: 16,
-    borderRadius: 14,
+    marginHorizontal: 14, marginBottom: 12,
+    padding: 16, borderRadius: 14,
     backgroundColor: C.card,
-    borderWidth: 1,
-    borderColor: C.border,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    borderWidth: 1, borderColor: C.border,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
-  masterLeft: { gap: 3 },
   masterTitle: { color: C.text, fontSize: 15, fontWeight: "800" },
-  masterSub:   { color: C.textSub, fontSize: 11 },
+  masterSub:   { color: C.sub, fontSize: 11, marginTop: 2 },
+
+  // stepper control
+  stepRow: {
+    flexDirection: "row", alignItems: "center",
+    justifyContent: "space-between", marginBottom: 10,
+  },
+  stepLabel: { color: C.dim, fontSize: 9, fontWeight: "700", letterSpacing: 1.5, flex: 1 },
+  stepControls: { flexDirection: "row", alignItems: "center", gap: 6 },
+  stepBtn: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: "rgba(124,58,237,0.18)",
+    borderWidth: 1, borderColor: C.border,
+    alignItems: "center", justifyContent: "center",
+  },
+  stepBtnTxt: { color: C.accent, fontSize: 18, fontWeight: "700", lineHeight: 22 },
+  stepVal: {
+    color: C.text, fontSize: 13, fontWeight: "700",
+    minWidth: 58, textAlign: "center",
+  },
 
   // note
-  noteBox: {
-    marginHorizontal: 14,
-    marginBottom: 24,
-    padding: 12,
-    borderRadius: 10,
+  note: {
+    marginHorizontal: 14, marginBottom: 24,
+    padding: 12, borderRadius: 10,
     backgroundColor: C.accentSoft,
-    borderWidth: 1,
-    borderColor: "rgba(124,58,237,0.22)",
+    borderWidth: 1, borderColor: "rgba(124,58,237,0.22)",
   },
-  noteText: { color: C.textSub, fontSize: 11, lineHeight: 16, textAlign: "center" },
+  noteTxt: { color: C.sub, fontSize: 11, lineHeight: 16, textAlign: "center" },
 });
 
-// ─── VBSlider ─────────────────────────────────────────────────────────────────
-function VBSlider({
-  label, value, min, max, step = 0.1, unit = "", color = C.accent, decimals = 1,
+// ─── Stepper (replaces PanResponder slider) ───────────────────────────────────
+function Stepper({
+  label, value, min, max, step = 0.1, unit = "", decimals = 1, color = C.accent,
   onChange,
 }: {
   label: string; value: number; min: number; max: number;
-  step?: number; unit?: string; color?: string; decimals?: number;
+  step?: number; unit?: string; decimals?: number; color?: string;
   onChange: (v: number) => void;
 }) {
-  const [trackW, setTrackW] = React.useState(280);
-  const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
-
-  const pr = React.useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder:  () => true,
-      onPanResponderGrant: handleTouch,
-      onPanResponderMove:  handleTouch,
-    })
-  ).current;
-
-  function handleTouch(e: any) {
-    const x = Math.max(0, Math.min(trackW, e.nativeEvent.locationX));
-    const raw = min + (x / trackW) * (max - min);
-    const snapped = Math.round(raw / step) * step;
-    onChange(parseFloat(Math.max(min, Math.min(max, snapped)).toFixed(10)));
+  function snap(v: number) {
+    return parseFloat(Math.max(min, Math.min(max, v)).toFixed(decimals));
   }
 
   return (
-    <View style={S.sliderWrap}>
-      <View style={S.sliderHead}>
-        <Text style={S.sliderLabel}>{label}</Text>
-        <Text style={S.sliderVal}>{value.toFixed(decimals)}{unit}</Text>
-      </View>
-      <View
-        style={S.sliderArea}
-        onLayout={e => setTrackW(e.nativeEvent.layout.width || 280)}
-        {...pr.panHandlers}
-      >
-        <View style={S.sliderTrack} />
-        <View style={{
-          position: "absolute", left: 0, height: 3, borderRadius: 2,
-          width: `${pct * 100}%` as any, backgroundColor: color, opacity: 0.9,
-        }} />
-        <View style={[S.sliderThumb, {
-          left: `${pct * 100}%` as any, marginLeft: -8, borderColor: color,
-        }]} />
+    <View style={S.stepRow}>
+      <Text style={[S.stepLabel, { color }]}>{label}</Text>
+      <View style={S.stepControls}>
+        <TouchableOpacity
+          style={S.stepBtn}
+          onPress={() => onChange(snap(value - step))}
+          activeOpacity={0.7}
+        >
+          <Text style={[S.stepBtnTxt, { color }]}>−</Text>
+        </TouchableOpacity>
+
+        <Text style={S.stepVal}>{value.toFixed(decimals)}{unit}</Text>
+
+        <TouchableOpacity
+          style={S.stepBtn}
+          onPress={() => onChange(snap(value + step))}
+          activeOpacity={0.7}
+        >
+          <Text style={[S.stepBtnTxt, { color }]}>+</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-// ─── TRow ─────────────────────────────────────────────────────────────────────
+// ─── Toggle row ───────────────────────────────────────────────────────────────
 function TRow({ label, value, onChange, color = C.accent }: {
-  label: string; value: boolean; onChange: (v: boolean) => void; color?: string;
+  label: string; value: boolean;
+  onChange: (v: boolean) => void; color?: string;
 }) {
   return (
     <View style={S.toggleRow}>
@@ -207,10 +166,10 @@ function TRow({ label, value, onChange, color = C.accent }: {
   );
 }
 
-// ─── SDiv ─────────────────────────────────────────────────────────────────────
-function SDiv({ title }: { title: string }) {
+// ─── Section divider ──────────────────────────────────────────────────────────
+function Sec({ title }: { title: string }) {
   return (
-    <View style={S.sectionHeader}>
+    <View style={S.sectionRow}>
       <View style={S.sectionLine} />
       <Text style={S.sectionLabel}>{title}</Text>
       <View style={S.sectionLine} />
@@ -218,12 +177,11 @@ function SDiv({ title }: { title: string }) {
   );
 }
 
-// ─── Settings (default export) ────────────────────────────────────────────────
+// ─── Main Settings ────────────────────────────────────────────────────────────
 export default function Settings() {
   useProxy(storage);
-  const [, tick] = React.useReducer(x => x + 1, 0);
+  const [, tick] = React.useReducer((x: number) => x + 1, 0);
 
-  // Rehydrate engine from storage on mount
   React.useEffect(() => {
     const s = storage as any;
     for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof AudioSettings)[]) {
@@ -241,130 +199,106 @@ export default function Settings() {
   }
 
   return (
-    <ScrollView style={S.root} showsVerticalScrollIndicator={false}>
+    <View style={S.root}>
+      <ScrollView style={S.scroll} showsVerticalScrollIndicator={false}>
 
-      {/* ── Status card ── */}
-      <View style={S.statusCard}>
-        <Text style={{ fontSize: 36 }}>🎙️</Text>
-        <View style={S.statusInfo}>
-          <Text style={S.statusTitle}>VoiceBoost</Text>
-          <Text style={S.statusSub}>
-            {e.enabled
-              ? `🟢  Active — Gain ×${e.gain.toFixed(1)}  Bass +${e.bassGain.toFixed(0)} dB`
-              : "⚫  Disabled — toggle to enable"}
+        {/* Status */}
+        <View style={S.statusCard}>
+          <Text style={{ fontSize: 34 }}>🎙️</Text>
+          <View style={S.statusInfo}>
+            <Text style={S.statusTitle}>VoiceBoost</Text>
+            <Text style={S.statusSub}>
+              {e.enabled
+                ? `🟢  Active  ·  Gain ×${e.gain.toFixed(1)}  ·  Bass +${e.bassGain.toFixed(0)} dB`
+                : "⚫  Disabled — toggle below to enable"}
+            </Text>
+          </View>
+        </View>
+
+        {/* Master enable */}
+        <View style={S.masterCard}>
+          <View>
+            <Text style={S.masterTitle}>⚡  Enable Processing</Text>
+            <Text style={S.masterSub}>Rejoin VC after toggling</Text>
+          </View>
+          <Switch
+            value={e.enabled}
+            onValueChange={v => set("enabled", v)}
+            trackColor={{ false: C.trackBg, true: C.green }}
+            thumbColor="#fff"
+            ios_backgroundColor={C.trackBg}
+          />
+        </View>
+
+        {/* INPUT */}
+        <View style={S.card}>
+          <Sec title="INPUT" />
+          <Stepper label="PREAMP" value={e.preamp} min={1} max={4} step={0.1}
+            unit="×" decimals={1} color={C.accent}
+            onChange={v => set("preamp", v)} />
+        </View>
+
+        {/* EQ */}
+        <View style={S.card}>
+          <Sec title="EQ" />
+          <Stepper label="BASS GAIN" value={e.bassGain} min={-6} max={24} step={1}
+            unit=" dB" decimals={0} color={C.blue}
+            onChange={v => set("bassGain", v)} />
+          <Stepper label="BASS FREQ" value={e.bassFreq} min={40} max={250} step={10}
+            unit=" Hz" decimals={0} color={C.blueDark}
+            onChange={v => set("bassFreq", v)} />
+          <Stepper label="PRESENCE" value={e.presenceGain} min={-6} max={12} step={1}
+            unit=" dB" decimals={0} color={C.cyan}
+            onChange={v => set("presenceGain", v)} />
+        </View>
+
+        {/* DRIVE */}
+        <View style={S.card}>
+          <Sec title="DRIVE" />
+          <Stepper label="OVERDRIVE" value={e.overdrive} min={0} max={1} step={0.05}
+            decimals={2} color={C.orange}
+            onChange={v => set("overdrive", v)} />
+        </View>
+
+        {/* OUTPUT */}
+        <View style={S.card}>
+          <Sec title="OUTPUT" />
+          <Stepper label="MAIN GAIN" value={e.gain} min={1} max={6} step={0.2}
+            unit="×" decimals={1} color={C.green}
+            onChange={v => set("gain", v)} />
+        </View>
+
+        {/* STEREO */}
+        <View style={S.card}>
+          <Sec title="STEREO" />
+          <Stepper label="WIDTH" value={e.stereoWidth} min={0} max={1} step={0.05}
+            decimals={2} color={C.purple}
+            onChange={v => set("stereoWidth", v)} />
+          <TRow label="Mono Mode" value={e.stereoMono}
+            onChange={v => set("stereoMono", v)} color={C.sub} />
+        </View>
+
+        {/* COMPRESSOR */}
+        <View style={S.card}>
+          <Sec title="COMPRESSOR" />
+          <TRow label="Enable Compressor" value={e.compEnabled}
+            onChange={v => set("compEnabled", v)} color={C.green} />
+          <Stepper label="THRESHOLD" value={e.compThreshold} min={-60} max={0} step={1}
+            unit=" dB" decimals={0} color={C.pink}
+            onChange={v => set("compThreshold", v)} />
+          <Stepper label="RATIO" value={e.compRatio} min={1} max={20} step={0.5}
+            unit=":1" decimals={1} color={C.pink}
+            onChange={v => set("compRatio", v)} />
+        </View>
+
+        {/* Note */}
+        <View style={S.note}>
+          <Text style={S.noteTxt}>
+            💡  After enabling, rejoin voice channel for processing to take effect
           </Text>
         </View>
-      </View>
 
-      {/* ── Master toggle ── */}
-      <View style={S.masterCard}>
-        <View style={S.masterLeft}>
-          <Text style={S.masterTitle}>⚡  Enable Processing</Text>
-          <Text style={S.masterSub}>Rejoin VC after toggling</Text>
-        </View>
-        <Switch
-          value={e.enabled}
-          onValueChange={v => set("enabled", v)}
-          trackColor={{ false: C.trackBg, true: C.green }}
-          thumbColor="#fff"
-          ios_backgroundColor={C.trackBg}
-        />
-      </View>
-
-      {/* ── INPUT ── */}
-      <View style={[S.section, { marginTop: 14 }]}>
-        <SDiv title="INPUT" />
-        <VBSlider
-          label="PREAMP" value={e.preamp} min={1} max={4} step={0.05}
-          unit="×" decimals={2} color={C.accent}
-          onChange={v => set("preamp", v)}
-        />
-      </View>
-
-      {/* ── EQ ── */}
-      <View style={S.section}>
-        <SDiv title="EQ" />
-        <VBSlider
-          label="BASS GAIN" value={e.bassGain} min={-6} max={24} step={0.5}
-          unit=" dB" decimals={1} color={C.blue}
-          onChange={v => set("bassGain", v)}
-        />
-        <VBSlider
-          label="BASS FREQ" value={e.bassFreq} min={40} max={250} step={5}
-          unit=" Hz" decimals={0} color={C.blueDark}
-          onChange={v => set("bassFreq", v)}
-        />
-        <VBSlider
-          label="PRESENCE" value={e.presenceGain} min={-6} max={12} step={0.5}
-          unit=" dB" decimals={1} color={C.cyan}
-          onChange={v => set("presenceGain", v)}
-        />
-      </View>
-
-      {/* ── DRIVE ── */}
-      <View style={S.section}>
-        <SDiv title="DRIVE" />
-        <VBSlider
-          label="OVERDRIVE" value={e.overdrive} min={0} max={1} step={0.01}
-          decimals={2} color={C.orange}
-          onChange={v => set("overdrive", v)}
-        />
-      </View>
-
-      {/* ── OUTPUT ── */}
-      <View style={S.section}>
-        <SDiv title="OUTPUT" />
-        <VBSlider
-          label="MAIN GAIN" value={e.gain} min={1} max={6} step={0.1}
-          unit="×" decimals={1} color={C.green}
-          onChange={v => set("gain", v)}
-        />
-      </View>
-
-      {/* ── STEREO ── */}
-      <View style={S.section}>
-        <SDiv title="STEREO" />
-        <VBSlider
-          label="STEREO WIDTH" value={e.stereoWidth} min={0} max={1} step={0.01}
-          decimals={2} color={C.purple}
-          onChange={v => set("stereoWidth", v)}
-        />
-        <TRow
-          label="Mono Mode"
-          value={e.stereoMono}
-          onChange={v => set("stereoMono", v)}
-          color={C.textSub}
-        />
-      </View>
-
-      {/* ── COMPRESSOR ── */}
-      <View style={S.section}>
-        <SDiv title="COMPRESSOR" />
-        <TRow
-          label="Enable Compressor"
-          value={e.compEnabled}
-          onChange={v => set("compEnabled", v)}
-          color={C.green}
-        />
-        <VBSlider
-          label="THRESHOLD" value={e.compThreshold} min={-60} max={0} step={1}
-          unit=" dB" decimals={0} color={C.pink}
-          onChange={v => set("compThreshold", v)}
-        />
-        <VBSlider
-          label="RATIO" value={e.compRatio} min={1} max={20} step={0.5}
-          unit=":1" decimals={1} color={C.pink}
-          onChange={v => set("compRatio", v)}
-        />
-      </View>
-
-      {/* ── Note ── */}
-      <View style={S.noteBox}>
-        <Text style={S.noteText}>
-          💡  Enable processing → rejoin voice channel → mic will be louder
-        </Text>
-      </View>
-
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
