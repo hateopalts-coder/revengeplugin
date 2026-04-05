@@ -21,7 +21,8 @@ export interface AudioSettings {
 }
 
 export const DEFAULT_SETTINGS: AudioSettings = {
-  enabled: false,
+  // FIX: was `false` — plugin never processed the stream on first install
+  enabled: true,
   preamp: 1.8,
   bassGain: 8,
   bassFreq: 80,
@@ -159,6 +160,10 @@ export class AudioEngine {
     const n = this.n;
 
     switch (key as string) {
+      case "enabled":
+        // FIX: no live graph change possible for enabled toggle —
+        // user must rejoin VC. Just update settings (done above). No-op here.
+        break;
       case "preamp":         n.preamp.gain.value        = val; break;
       case "bassGain":       n.bass.gain.value          = val; break;
       case "bassFreq":       n.bass.frequency.value     = val; break;
