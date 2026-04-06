@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  VoiceBoost · utils.ts
 //  Audio processing engine (Web Audio API chain)
-//  Chain: Mic → Preamp → Bass EQ → Presence EQ → Overdrive → Gain →
-//         Stereo Widener (Haas) → DynamicsCompressor → Output
+//  Mic → Preamp → Bass EQ → Presence EQ → Overdrive → Gain →
+//        Stereo Widener / Mono → DynamicsCompressor → Output
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface AudioSettings {
@@ -54,6 +54,8 @@ export class AudioEngine {
   settings: AudioSettings;
   private ctx: AudioContext | null = null;
   private n: Record<string, any> = {};
+  private rawStream: MediaStream | null = null;
+  private outputStream: MediaStream | null = null;
 
   constructor() {
     this.settings = { ...DEFAULT_SETTINGS };
@@ -66,18 +68,26 @@ export class AudioEngine {
     return this.settings;
   }
 
+  getOutputStream(): MediaStream | null {
+    return this.outputStream;
+  }
+
+  getOutputTrack(): MediaStreamTrack | null {
+    return this.outputStream?.getAudioTracks?.()[0] ?? null;
+  }
+
   /** Attach engine to a live MediaStream. Returns processed stream. */
   async attach(stream: MediaStream): Promise<MediaStream> {
-    const AC =
-      (window as any).AudioContext ??
-      (window as any).webkitAudioContext;
+    this.rawStream = stream;
+    const AC = (window as any).AudioContext ?? (window as any).webkitAudioContext;
 
     if (!AC) {
       console.warn("[VoiceBoost] AudioContext unavailable — returning raw stream");
+      this.outputStream = stream;
       return stream;
     }
 
-    // Clean up previous context
+    // Close old graph first
     if (this.ctx) {
       try {
         await this.ctx.close();
@@ -89,6 +99,13 @@ export class AudioEngine {
     const ctx = (this.ctx = new AC({ sampleRate: 48000 }));
     const n = (this.n = {});
     const s = this.ensureSettings();
+
+    // Some clients keep audio contexts suspended until user gesture
+    try {
+      await ctx.resume();
+    } catch (_) {
+      // ignore
+    }
 
     // ── Nodes ────────────────────────────────────────────────────────────────
     n.src = ctx.createMediaStreamSource(stream);
@@ -114,7 +131,6 @@ export class AudioEngine {
     n.gain = ctx.createGain();
     n.gain.gain.value = s.gain;
 
-    n.split = ctx.createChannelSplitter(2);
     n.merge = ctx.createChannelMerger(2);
     n.haas = ctx.createDelay(0.05);
     n.haas.delayTime.value = s.stereoMono ? 0 : s.stereoWidth * 0.025;
@@ -134,14 +150,16 @@ export class AudioEngine {
     n.bass.connect(n.pres);
     n.pres.connect(n.dist);
     n.dist.connect(n.gain);
-    n.gain.connect(n.split);
 
+    // Safer stereo handling:
+    // mono mode = duplicate same signal to both channels
+    // stereo mode = left dry, right delayed (Haas width)
     if (s.stereoMono) {
-      n.split.connect(n.merge, 0, 0);
-      n.split.connect(n.merge, 0, 1);
+      n.gain.connect(n.merge, 0, 0);
+      n.gain.connect(n.merge, 0, 1);
     } else {
-      n.split.connect(n.merge, 0, 0);
-      n.split.connect(n.haas, 1);
+      n.gain.connect(n.merge, 0, 0);
+      n.gain.connect(n.haas);
       n.haas.connect(n.merge, 0, 1);
     }
 
@@ -152,7 +170,12 @@ export class AudioEngine {
       n.merge.connect(n.dest);
     }
 
-    return n.dest.stream as MediaStream;
+    this.outputStream = n.dest.stream as MediaStream;
+
+    const outTrack = this.outputStream.getAudioTracks?.()[0];
+    if (outTrack) outTrack.enabled = true;
+
+    return this.outputStream;
   }
 
   /** Live-update a single setting without rebuilding the graph */
@@ -205,6 +228,12 @@ export class AudioEngine {
     }
   }
 
+  /** Rebuild using the last raw mic stream */
+  async refresh(): Promise<MediaStream | null> {
+    if (!this.rawStream) return null;
+    return this.attach(this.rawStream);
+  }
+
   /** Tear down AudioContext and release all resources */
   async destroy(): Promise<void> {
     try {
@@ -214,6 +243,8 @@ export class AudioEngine {
     }
     this.ctx = null;
     this.n = {};
+    this.rawStream = null;
+    this.outputStream = null;
   }
 }
 
