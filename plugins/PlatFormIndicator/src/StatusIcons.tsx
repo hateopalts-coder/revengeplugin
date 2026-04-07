@@ -18,7 +18,7 @@ const PLATFORM_STORAGE_KEYS: Record<string, string> = {
 };
 
 let statusCache: any;
-let statusCacheHits = 0;
+let statusCacheHits  = 0;
 let statusCacheTimeout: any;
 
 function queryPresenceStoreWithCache() {
@@ -28,17 +28,15 @@ function queryPresenceStoreWithCache() {
             statusCacheTimeout = null;
         }, 5000);
     }
-    if (!statusCache || statusCacheHits == 0) {
-        statusCache = PresenceStore.getState();
-    }
+    if (!statusCache || statusCacheHits === 0) statusCache = PresenceStore.getState();
     statusCacheHits = (statusCacheHits + 1) % 20;
     return statusCache;
 }
 
-// Exported so index.tsx can use it for the chat patch too
+// Exported so index.tsx can also use it
 export function getUserStatuses(userId: string): Record<string, string> {
     try {
-        // FIX: fetch fresh every time — don't cache currentUserId in module scope
+        // FIX: always fetch fresh — never cache currentUserId in module scope
         const currentUserId = UserStore.getCurrentUser()?.id;
         if (userId === currentUserId) {
             return Object.values(SessionsStore.getSessions()).reduce((acc: any, curr: any) => {
@@ -46,10 +44,9 @@ export function getUserStatuses(userId: string): Record<string, string> {
                     acc[curr.clientInfo.client] = curr.status;
                 return acc;
             }, {} as Record<string, string>);
-        } else {
-            return queryPresenceStoreWithCache()?.clientStatuses?.[userId] ?? {};
         }
-    } catch (e) {
+        return queryPresenceStoreWithCache()?.clientStatuses?.[userId] ?? {};
+    } catch (_) {
         return {};
     }
 }
@@ -61,14 +58,14 @@ export default function StatusIcons(props: { userId: string; size?: number }) {
     const iconSize = props.size ?? 16;
     const statuses = getUserStatuses(userId);
 
-    const visiblePlatforms = Object.keys(statuses).filter((p) => {
+    const visiblePlatforms = Object.keys(statuses).filter(p => {
         const key = PLATFORM_STORAGE_KEYS[p];
         return !key || storage[key] !== false;
     });
 
     return (
         <>
-            {visiblePlatforms.map((s) =>
+            {visiblePlatforms.map(s =>
                 <StatusIcon
                     key={s}
                     platform={s}
