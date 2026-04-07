@@ -2,21 +2,13 @@ import { findByStoreName } from '@vendetta/metro';
 import React from 'react'
 import StatusIcon from './StatusIcon';
 import { getStatusColor } from './colors';
-
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
 
 const PresenceStore = findByStoreName("PresenceStore");
 const SessionsStore = findByStoreName("SessionsStore");
-const UserStore = findByStoreName("UserStore");
+const UserStore     = findByStoreName("UserStore");
 
-
-let statusCache;
-let statusCacheHits = 0;
-let statusCacheTimeout;
-let currentUserId;
-
-// Map from platform key -> storage key
 const PLATFORM_STORAGE_KEYS: Record<string, string> = {
     desktop:  "showDesktop",
     mobile:   "showMobile",
@@ -25,55 +17,53 @@ const PLATFORM_STORAGE_KEYS: Record<string, string> = {
     vr:       "showVR",
 };
 
-function queryPresenceStoreWithCache(){
-    if(!statusCacheTimeout){
+let statusCache: any;
+let statusCacheHits = 0;
+let statusCacheTimeout: any;
+
+function queryPresenceStoreWithCache() {
+    if (!statusCacheTimeout) {
         statusCacheTimeout = setTimeout(() => {
-            statusCacheHits = 0
-            statusCacheTimeout = null
-        },5000);
+            statusCacheHits = 0;
+            statusCacheTimeout = null;
+        }, 5000);
     }
-
-    if(!statusCache || statusCacheHits == 0){
-        statusCache = PresenceStore.getState()
+    if (!statusCache || statusCacheHits == 0) {
+        statusCache = PresenceStore.getState();
     }
-
-    statusCacheHits = (statusCacheHits+1) % 20
-
-    return statusCache
+    statusCacheHits = (statusCacheHits + 1) % 20;
+    return statusCache;
 }
 
-function getUserStatuses(userId){
-    let statuses;
-
-    if(!currentUserId){
-        currentUserId = UserStore.getCurrentUser()?.id
+// Exported so index.tsx can use it for the chat patch too
+export function getUserStatuses(userId: string): Record<string, string> {
+    try {
+        // FIX: fetch fresh every time — don't cache currentUserId in module scope
+        const currentUserId = UserStore.getCurrentUser()?.id;
+        if (userId === currentUserId) {
+            return Object.values(SessionsStore.getSessions()).reduce((acc: any, curr: any) => {
+                if (curr?.clientInfo?.client && curr.clientInfo.client !== "unknown")
+                    acc[curr.clientInfo.client] = curr.status;
+                return acc;
+            }, {} as Record<string, string>);
+        } else {
+            return queryPresenceStoreWithCache()?.clientStatuses?.[userId] ?? {};
+        }
+    } catch (e) {
+        return {};
     }
-
-    if(userId == currentUserId){
-        statuses = Object.values(SessionsStore.getSessions()).reduce((acc: any, curr: any) => {
-            if (curr.clientInfo.client !== "unknown")
-                acc[curr.clientInfo.client] = curr.status;
-            return acc;
-        }, {});
-    } else {
-        statuses = queryPresenceStoreWithCache()?.clientStatuses[userId]
-    }
-    return statuses
 }
 
-export default function StatusIcons(props) {
-    useProxy(storage)
+export default function StatusIcons(props: { userId: string; size?: number }) {
+    useProxy(storage);
 
-    const userId = props.userId;
+    const userId   = props.userId;
     const iconSize = props.size ?? 16;
+    const statuses = getUserStatuses(userId);
 
-    const statuses = getUserStatuses(userId)
-
-    // Filter platforms the user has disabled in settings
-    const visiblePlatforms = Object.keys(statuses ?? {}).filter((platform) => {
-        const storageKey = PLATFORM_STORAGE_KEYS[platform];
-        if (!storageKey) return true; // unknown platform → show by default
-        return storage[storageKey] !== false; // default true if not set
+    const visiblePlatforms = Object.keys(statuses).filter((p) => {
+        const key = PLATFORM_STORAGE_KEYS[p];
+        return !key || storage[key] !== false;
     });
 
     return (
@@ -87,5 +77,5 @@ export default function StatusIcons(props) {
                 />
             )}
         </>
-    )
+    );
 }

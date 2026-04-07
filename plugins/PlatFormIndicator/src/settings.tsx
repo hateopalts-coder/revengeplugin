@@ -3,7 +3,7 @@ import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
 import { Forms } from "@vendetta/ui/components";
 
-const {View, ScrollView, Text} = ReactNative;
+const { View, ScrollView } = ReactNative;
 
 export default function Settings() {
     useProxy(storage);
@@ -12,7 +12,7 @@ export default function Settings() {
         <ScrollView>
             <View>
                 <Forms.FormSwitchRow
-                    label="Show icons on the dm top bar"
+                    label="Show icons on the DM top bar"
                     value={storage.dmTopBar ?? true}
                     onValueChange={v => storage.dmTopBar = v}
                     note=""
@@ -33,7 +33,7 @@ export default function Settings() {
                     label="Show in chat"
                     value={storage.showInChat ?? false}
                     onValueChange={v => storage.showInChat = v}
-                    note="Shows platform indicator next to username in chat messages (e.g. Username 🖥)"
+                    note="Shows platform emoji next to username in chat (long names get truncated)"
                 />
                 <Forms.FormSwitchRow
                     label="Hide mobile status from the normal indicator"
@@ -53,41 +53,40 @@ export default function Settings() {
                     onValueChange={v => storage.oldUserListIcons = v}
                     note="Moves status indicators to the right"
                 />
-
-                {/* ── Per-platform visibility toggles ── */}
-                <Forms.FormSection title="Platform Visibility">
-                    <Forms.FormSwitchRow
-                        label="Desktop"
-                        value={storage.showDesktop ?? true}
-                        onValueChange={v => storage.showDesktop = v}
-                        note="Show/hide Desktop indicator"
-                    />
-                    <Forms.FormSwitchRow
-                        label="Mobile"
-                        value={storage.showMobile ?? true}
-                        onValueChange={v => storage.showMobile = v}
-                        note="Show/hide Mobile indicator"
-                    />
-                    <Forms.FormSwitchRow
-                        label="Browser / Web"
-                        value={storage.showWeb ?? true}
-                        onValueChange={v => storage.showWeb = v}
-                        note="Show/hide Browser (Web) indicator"
-                    />
-                    <Forms.FormSwitchRow
-                        label="Console / Embedded"
-                        value={storage.showEmbedded ?? true}
-                        onValueChange={v => storage.showEmbedded = v}
-                        note="Show/hide Console/Embedded indicator"
-                    />
-                    <Forms.FormSwitchRow
-                        label="VR"
-                        value={storage.showVR ?? true}
-                        onValueChange={v => storage.showVR = v}
-                        note="Show/hide VR indicator"
-                    />
-                </Forms.FormSection>
             </View>
+
+            <Forms.FormSection title="Platform Visibility">
+                <Forms.FormSwitchRow
+                    label="Desktop"
+                    value={storage.showDesktop ?? true}
+                    onValueChange={v => storage.showDesktop = v}
+                    note=""
+                />
+                <Forms.FormSwitchRow
+                    label="Mobile"
+                    value={storage.showMobile ?? true}
+                    onValueChange={v => storage.showMobile = v}
+                    note=""
+                />
+                <Forms.FormSwitchRow
+                    label="Browser / Web"
+                    value={storage.showWeb ?? true}
+                    onValueChange={v => storage.showWeb = v}
+                    note=""
+                />
+                <Forms.FormSwitchRow
+                    label="Console / Embedded"
+                    value={storage.showEmbedded ?? true}
+                    onValueChange={v => storage.showEmbedded = v}
+                    note=""
+                />
+                <Forms.FormSwitchRow
+                    label="VR"
+                    value={storage.showVR ?? true}
+                    onValueChange={v => storage.showVR = v}
+                    note=""
+                />
+            </Forms.FormSection>
         </ScrollView>
     );
 }
