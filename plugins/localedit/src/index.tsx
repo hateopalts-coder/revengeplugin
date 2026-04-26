@@ -1,6 +1,6 @@
 import { findByProps, findByStoreName } from "@vendetta/metro";
 import { FluxDispatcher, i18n } from "@vendetta/metro/common";
-import { before, after } from "@vendetta/patcher";
+import { before, after, instead } from "@vendetta/patcher";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
 import { findInReactTree } from "@vendetta/utils";
@@ -8,17 +8,13 @@ import { findInReactTree } from "@vendetta/utils";
 const LazyActionSheet = findByProps("openLazy", "hideActionSheet");
 const ActionSheetRow = findByProps("ActionSheetRow")?.ActionSheetRow ?? Forms.FormRow;
 const MessageStore = findByStoreName("MessageStore");
-const UserStore = findByStoreName("UserStore");
 const Messages = findByProps("sendMessage", "startEditMessage", "editMessage");
 
 const edits = new Map<string, any>();
-
-// Tracks which kind of local edit is active
 let editMode: "content" | "time" | null = null;
+let activeEditId: string | null = null;       // ← naya: exact message track karo
+const patches: (() => void)[] = [];
 
-let patches: (() => void)[] = [];
-
-// Parse "6:07 PM", "6:07PM", "18:07", or "6:07" into a full ISO timestamp
 function parseTimeInput(input: string, baseTimestamp: string): string | null {
     const base = new Date(baseTimestamp ?? Date.now());
 
@@ -46,7 +42,6 @@ function parseTimeInput(input: string, baseTimestamp: string): string | null {
     return null;
 }
 
-// Format the message timestamp as "6:07 PM" to pre-fill the edit box
 function formatTimeForEdit(timestamp: string): string {
     const d = new Date(timestamp ?? Date.now());
     const h = d.getHours();
@@ -70,22 +65,18 @@ export default {
                     if (!buttons) return;
 
                     const currentMessage = MessageStore.getMessage(message.channel_id, message.id) ?? message;
-
-                    // Self-user guard removed — own messages are now included
-
-                    if (buttons.some(b => b?.props?.label === "Edit Locally")) return;
+                    if (buttons.some((b: any) => b?.props?.label === "Edit Locally")) return;
 
                     const position = Math.max(
-                        buttons.findIndex((x: any) => x.props.message === i18n.Messages.MARK_UNREAD),
+                        buttons.findIndex((x: any) => x?.props?.message === i18n.Messages.MARK_UNREAD),
                         0
                     );
 
-                    // ── Edit Locally: edits message content inline ──
                     const handleEditContent = () => {
                         editMode = "content";
-                        if (!edits.has(currentMessage.id)) {
-                            edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
-                        }
+                        activeEditId = currentMessage.id;
+                        // Hamesha fresh copy lo
+                        edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
                         LazyActionSheet.hideActionSheet();
                         Messages.startEditMessage(
                             currentMessage.channel_id,
@@ -94,14 +85,11 @@ export default {
                         );
                     };
 
-                    // ── Edit Time: reuses Discord's inline edit box, pre-filled with "6:07 PM" ──
                     const handleEditTime = () => {
                         editMode = "time";
-                        if (!edits.has(currentMessage.id)) {
-                            edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
-                        }
+                        activeEditId = currentMessage.id;
+                        edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
                         LazyActionSheet.hideActionSheet();
-                        // Pre-fill the chat edit box with the current time e.g. "6:07 PM"
                         Messages.startEditMessage(
                             currentMessage.channel_id,
                             currentMessage.id,
@@ -125,60 +113,71 @@ export default {
             });
         }));
 
-        patches.push(before("editMessage", Messages, (args) => {
+        // ─── KEY FIX: `before` + `return false` ki jagah `instead` use karo ───
+        // `instead` mein hum khud decide karte hain ke orig() call ho ya nahi.
+        // `before` ka `return false` vendetta mein guarantee nahi karta cancellation.
+        patches.push(instead("editMessage", Messages, (args, orig) => {
             const [channelId, messageId, message] = args;
-            const baseMessage = edits.get(messageId);
-            if (!baseMessage) return;
 
-            if (editMode === "content") {
-                // Locally update the content, keep existing timestamp
-                FluxDispatcher.dispatch({
-                    type: "MESSAGE_UPDATE",
-                    message: {
-                        ...baseMessage,
-                        content: message.content,
-                        edited_timestamp: null,
-                    },
-                    otherPluginBypass: true,
-                });
-                editMode = null;
-                return false;
-            }
+            // Sirf wahi message intercept karo jo humne trigger kiya tha
+            if (editMode !== null && activeEditId === messageId) {
+                const baseMessage = edits.get(messageId);
 
-            if (editMode === "time") {
-                // The user typed a new time — parse it and update the timestamp only
-                const newTimestamp = parseTimeInput(message.content, baseMessage.timestamp);
-                if (newTimestamp) {
-                    // Preserve whatever the current displayed content is
-                    const live = MessageStore.getMessage(channelId, messageId) ?? baseMessage;
-                    FluxDispatcher.dispatch({
-                        type: "MESSAGE_UPDATE",
-                        message: {
-                            ...baseMessage,
-                            content: live.content,
-                            timestamp: newTimestamp,
-                            edited_timestamp: null,
-                        },
-                        otherPluginBypass: true,
-                    });
+                if (baseMessage) {
+                    if (editMode === "content") {
+                        FluxDispatcher.dispatch({
+                            type: "MESSAGE_UPDATE",
+                            message: {
+                                ...baseMessage,
+                                content: message.content,
+                                edited_timestamp: null,   // "edited" badge nahi aayega
+                            },
+                            otherPluginBypass: true,
+                        });
+                        editMode = null;
+                        activeEditId = null;
+                        return; // ← orig() call NAHI hoga → API pe nahi jayega
+                    }
+
+                    if (editMode === "time") {
+                        const newTimestamp = parseTimeInput(message.content, baseMessage.timestamp);
+                        if (newTimestamp) {
+                            // Live content preserve karo, sirf timestamp badlo
+                            const live = MessageStore.getMessage(channelId, messageId) ?? baseMessage;
+                            FluxDispatcher.dispatch({
+                                type: "MESSAGE_UPDATE",
+                                message: {
+                                    ...baseMessage,
+                                    content: live.content,
+                                    timestamp: newTimestamp,
+                                    edited_timestamp: null,
+                                },
+                                otherPluginBypass: true,
+                            });
+                        }
+                        editMode = null;
+                        activeEditId = null;
+                        return; // ← orig() call NAHI hoga
+                    }
                 }
-                editMode = null;
-                return false;
             }
+
+            // Normal edit (humara nahi) → API pe jaane do
+            return orig(...args);
         }));
 
         patches.push(after("endEditMessage", Messages, () => {
-            // User pressed Escape / cancelled — reset mode
-            if (editMode !== null) {
-                editMode = null;
-            }
+            // ESC press / cancel → state reset
+            editMode = null;
+            activeEditId = null;
         }));
     },
 
     onUnload() {
-        patches.forEach(p => p());
-        patches = [];
+        for (const p of patches) p();
+        patches.length = 0;
         edits.clear();
         editMode = null;
+        activeEditId = null;
     }
 };
