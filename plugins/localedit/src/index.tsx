@@ -12,7 +12,16 @@ const Messages = findByProps("sendMessage", "startEditMessage", "editMessage");
 
 const edits = new Map<string, any>();
 let editMode: "content" | "time" | null = null;
-let activeEditId: string | null = null;       // ← naya: exact message track karo
+let activeEditId: string | null = null;
+
+// ── KEY FLAG ──────────────────────────────────────────────────────────────────
+// startEditMessage internally calls endEditMessage to clear the previous session.
+// Without this flag our after("endEditMessage") patch would immediately reset
+// editMode → null the moment we call startEditMessage, so the user's submit
+// would fall through to the real Discord API.
+let isStartingEdit = false;
+// ─────────────────────────────────────────────────────────────────────────────
+
 const patches: (() => void)[] = [];
 
 function parseTimeInput(input: string, baseTimestamp: string): string | null {
@@ -53,6 +62,7 @@ function formatTimeForEdit(timestamp: string): string {
 
 export default {
     onLoad() {
+
         patches.push(before("openLazy", LazyActionSheet, ([component, key, msg]) => {
             const message = msg?.message;
             if (key !== "MessageLongPressActionSheet" || !message) return;
@@ -64,25 +74,33 @@ export default {
                     const buttons = findInReactTree(res, x => x?.[0]?.type?.name === "ActionSheetRow");
                     if (!buttons) return;
 
-                    const currentMessage = MessageStore.getMessage(message.channel_id, message.id) ?? message;
+                    const currentMessage =
+                        MessageStore.getMessage(message.channel_id, message.id) ?? message;
+
                     if (buttons.some((b: any) => b?.props?.label === "Edit Locally")) return;
 
                     const position = Math.max(
-                        buttons.findIndex((x: any) => x?.props?.message === i18n.Messages.MARK_UNREAD),
+                        buttons.findIndex((x: any) =>
+                            x?.props?.message === i18n.Messages.MARK_UNREAD
+                        ),
                         0
                     );
 
                     const handleEditContent = () => {
                         editMode = "content";
                         activeEditId = currentMessage.id;
-                        // Hamesha fresh copy lo
                         edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
                         LazyActionSheet.hideActionSheet();
+
+                        // Guard: don't let our endEditMessage patch reset state
+                        // during the internal endEditMessage that startEditMessage fires
+                        isStartingEdit = true;
                         Messages.startEditMessage(
                             currentMessage.channel_id,
                             currentMessage.id,
                             currentMessage.content
                         );
+                        isStartingEdit = false;
                     };
 
                     const handleEditTime = () => {
@@ -90,14 +108,19 @@ export default {
                         activeEditId = currentMessage.id;
                         edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
                         LazyActionSheet.hideActionSheet();
+
+                        // Same guard — critical for Edit Time
+                        isStartingEdit = true;
                         Messages.startEditMessage(
                             currentMessage.channel_id,
                             currentMessage.id,
                             formatTimeForEdit(currentMessage.timestamp)
                         );
+                        isStartingEdit = false;
                     };
 
-                    buttons.splice(position, 0,
+                    buttons.splice(
+                        position, 0,
                         <ActionSheetRow
                             label="Edit Locally"
                             icon={<ActionSheetRow.Icon source={getAssetIDByName("ic_edit_24px")} />}
@@ -113,13 +136,10 @@ export default {
             });
         }));
 
-        // ─── KEY FIX: `before` + `return false` ki jagah `instead` use karo ───
-        // `instead` mein hum khud decide karte hain ke orig() call ho ya nahi.
-        // `before` ka `return false` vendetta mein guarantee nahi karta cancellation.
+        // Intercept editMessage — block real API call for our local edits
         patches.push(instead("editMessage", Messages, (args, orig) => {
             const [channelId, messageId, message] = args;
 
-            // Sirf wahi message intercept karo jo humne trigger kiya tha
             if (editMode !== null && activeEditId === messageId) {
                 const baseMessage = edits.get(messageId);
 
@@ -130,20 +150,23 @@ export default {
                             message: {
                                 ...baseMessage,
                                 content: message.content,
-                                edited_timestamp: null,   // "edited" badge nahi aayega
+                                edited_timestamp: null,
                             },
                             otherPluginBypass: true,
                         });
                         editMode = null;
                         activeEditId = null;
-                        return; // ← orig() call NAHI hoga → API pe nahi jayega
+                        return; // ← DO NOT call orig() — no API request
                     }
 
                     if (editMode === "time") {
-                        const newTimestamp = parseTimeInput(message.content, baseMessage.timestamp);
+                        const newTimestamp = parseTimeInput(
+                            message.content,
+                            baseMessage.timestamp
+                        );
                         if (newTimestamp) {
-                            // Live content preserve karo, sirf timestamp badlo
-                            const live = MessageStore.getMessage(channelId, messageId) ?? baseMessage;
+                            const live =
+                                MessageStore.getMessage(channelId, messageId) ?? baseMessage;
                             FluxDispatcher.dispatch({
                                 type: "MESSAGE_UPDATE",
                                 message: {
@@ -157,19 +180,24 @@ export default {
                         }
                         editMode = null;
                         activeEditId = null;
-                        return; // ← orig() call NAHI hoga
+                        return; // ← DO NOT call orig() — no API request
                     }
                 }
             }
 
-            // Normal edit (humara nahi) → API pe jaane do
+            // Normal edit (not ours) — let Discord handle it
             return orig(...args);
         }));
 
+        // Detect user pressing Escape / tapping away to cancel edit
         patches.push(after("endEditMessage", Messages, () => {
-            // ESC press / cancel → state reset
-            editMode = null;
-            activeEditId = null;
+            // IMPORTANT: skip reset if WE triggered endEditMessage via startEditMessage
+            if (isStartingEdit) return;
+
+            if (editMode !== null) {
+                editMode = null;
+                activeEditId = null;
+            }
         }));
     },
 
@@ -179,5 +207,6 @@ export default {
         edits.clear();
         editMode = null;
         activeEditId = null;
-    }
+        isStartingEdit = false;
+    },
 };
