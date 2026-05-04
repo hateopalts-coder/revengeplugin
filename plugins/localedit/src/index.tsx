@@ -14,42 +14,9 @@ const edits = new Map<string, any>();
 let editMode: "content" | "time" | null = null;
 let activeEditId: string | null = null;
 
-// ── KEY FLAG ──────────────────────────────────────────────────────────────────
-// startEditMessage internally calls endEditMessage to clear the previous session.
-// Without this flag our after("endEditMessage") patch would immediately reset
-// editMode → null the moment we call startEditMessage, so the user's submit
-// would fall through to the real Discord API.
 let isStartingEdit = false;
-// ─────────────────────────────────────────────────────────────────────────────
 
 const patches: (() => void)[] = [];
-
-function parseTimeInput(input: string, baseTimestamp: string): string | null {
-    const base = new Date(baseTimestamp ?? Date.now());
-
-    const ampmMatch = input.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-    if (ampmMatch) {
-        let h = Number(ampmMatch[1]);
-        const m = Number(ampmMatch[2]);
-        const period = ampmMatch[3].toUpperCase();
-        if (period === "AM" && h === 12) h = 0;
-        if (period === "PM" && h !== 12) h += 12;
-        if (h > 23 || m > 59) return null;
-        base.setHours(h, m, 0, 0);
-        return base.toISOString();
-    }
-
-    const h24Match = input.trim().match(/^(\d{1,2}):(\d{2})$/);
-    if (h24Match) {
-        const h = Number(h24Match[1]);
-        const m = Number(h24Match[2]);
-        if (h > 23 || m > 59) return null;
-        base.setHours(h, m, 0, 0);
-        return base.toISOString();
-    }
-
-    return null;
-}
 
 function formatTimeForEdit(timestamp: string): string {
     const d = new Date(timestamp ?? Date.now());
@@ -92,8 +59,6 @@ export default {
                         edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
                         LazyActionSheet.hideActionSheet();
 
-                        // Guard: don't let our endEditMessage patch reset state
-                        // during the internal endEditMessage that startEditMessage fires
                         isStartingEdit = true;
                         Messages.startEditMessage(
                             currentMessage.channel_id,
@@ -109,7 +74,6 @@ export default {
                         edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
                         LazyActionSheet.hideActionSheet();
 
-                        // Same guard — critical for Edit Time
                         isStartingEdit = true;
                         Messages.startEditMessage(
                             currentMessage.channel_id,
@@ -136,7 +100,6 @@ export default {
             });
         }));
 
-        // Intercept editMessage — block real API call for our local edits
         patches.push(instead("editMessage", Messages, (args, orig) => {
             const [channelId, messageId, message] = args;
 
@@ -156,42 +119,33 @@ export default {
                         });
                         editMode = null;
                         activeEditId = null;
-                        return; // ← DO NOT call orig() — no API request
+                        return;
                     }
 
                     if (editMode === "time") {
-                        const newTimestamp = parseTimeInput(
-                            message.content,
-                            baseMessage.timestamp
-                        );
-                        if (newTimestamp) {
-                            const live =
-                                MessageStore.getMessage(channelId, messageId) ?? baseMessage;
-                            FluxDispatcher.dispatch({
-                                type: "MESSAGE_UPDATE",
-                                message: {
-                                    ...baseMessage,
-                                    content: live.content,
-                                    timestamp: newTimestamp,
-                                    edited_timestamp: null,
-                                },
-                                otherPluginBypass: true,
-                            });
-                        }
+                        const live =
+                            MessageStore.getMessage(channelId, messageId) ?? baseMessage;
+                        FluxDispatcher.dispatch({
+                            type: "MESSAGE_UPDATE",
+                            message: {
+                                ...baseMessage,
+                                content: live.content,
+                                timestamp: message.content,
+                                edited_timestamp: null,
+                            },
+                            otherPluginBypass: true,
+                        });
                         editMode = null;
                         activeEditId = null;
-                        return; // ← DO NOT call orig() — no API request
+                        return;
                     }
                 }
             }
 
-            // Normal edit (not ours) — let Discord handle it
             return orig(...args);
         }));
 
-        // Detect user pressing Escape / tapping away to cancel edit
         patches.push(after("endEditMessage", Messages, () => {
-            // IMPORTANT: skip reset if WE triggered endEditMessage via startEditMessage
             if (isStartingEdit) return;
 
             if (editMode !== null) {
