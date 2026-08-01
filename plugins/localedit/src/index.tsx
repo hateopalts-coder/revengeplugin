@@ -11,20 +11,20 @@ const MessageStore = findByStoreName("MessageStore");
 const Messages = findByProps("sendMessage", "startEditMessage", "editMessage");
 
 // messageId → custom text jo user ne likha
-const customTimeOverrides = new Map();
+const customTimeOverrides = new Map<string, string>();
 
-const edits = new Map();
-let editMode = null;
-let activeEditId = null;
+const edits = new Map<string, any>();
+let editMode: "content" | "time" | null = null;
+let activeEditId: string | null = null;
 let isStartingEdit = false;
 
-const patches = [];
+const patches: Array<() => void> = [];
 
-function log(...args) {
+function log(...args: any[]) {
     console.log("[EditTime]", ...args);
 }
 
-function formatTimeForEdit(timestamp) {
+function formatTimeForEdit(timestamp: any) {
     const d = new Date(timestamp ?? Date.now());
     const h = d.getHours();
     const m = String(d.getMinutes()).padStart(2, "0");
@@ -34,8 +34,8 @@ function formatTimeForEdit(timestamp) {
 }
 
 // ── Helper: React tree mein timestamp text dhundo aur replace karo ───────────
-function replaceTimestampText(tree, override) {
-    const timeEl = findInReactTree(tree, x => x?.type === "time");
+function replaceTimestampText(tree: any, override: string) {
+    const timeEl = findInReactTree(tree, (x: any) => x?.type === "time");
     if (timeEl?.props) {
         if (typeof timeEl.props.children === "string") timeEl.props.children = override;
         if (timeEl.props["aria-label"]) timeEl.props["aria-label"] = override;
@@ -44,7 +44,7 @@ function replaceTimestampText(tree, override) {
         return true;
     }
 
-    const textEl = findInReactTree(tree, x =>
+    const textEl = findInReactTree(tree, (x: any) =>
         typeof x?.props?.children === "string" &&
         /^\d{1,2}:\d{2}(\s?(AM|PM))?$/i.test(x.props.children.trim())
     );
@@ -55,7 +55,7 @@ function replaceTimestampText(tree, override) {
         return true;
     }
 
-    const shortTextEl = findInReactTree(tree, x =>
+    const shortTextEl = findInReactTree(tree, (x: any) =>
         typeof x?.props?.children === "string" &&
         x.props.children.length < 15 &&
         x.props.children.includes(":")
@@ -89,7 +89,7 @@ function patchTimestampRenderer() {
                     if (!msgId) return;
                     log("Strategy A fired for msgId:", msgId, "hasOverride:", customTimeOverrides.has(msgId));
                     if (!customTimeOverrides.has(msgId)) return;
-                    replaceTimestampText(res, customTimeOverrides.get(msgId));
+                    replaceTimestampText(res, customTimeOverrides.get(msgId)!);
                 }));
                 log("Strategy A patch attached");
             } catch (e) {
@@ -107,7 +107,7 @@ function patchTimestampRenderer() {
     log("Strategy B messageModule:", messageModule ? Object.keys(messageModule) : null);
 
     if (messageModule) {
-        const fnKey = Object.keys(messageModule).find(k => typeof messageModule[k] === "function");
+        const fnKey = Object.keys(messageModule).find(k => typeof (messageModule as any)[k] === "function");
         if (fnKey) {
             try {
                 patches.push(after(fnKey, messageModule, ([props], res) => {
@@ -116,7 +116,7 @@ function patchTimestampRenderer() {
                     if (!msgId) return;
                     log("Strategy B fired for msgId:", msgId, "hasOverride:", customTimeOverrides.has(msgId));
                     if (!customTimeOverrides.has(msgId)) return;
-                    replaceTimestampText(res, customTimeOverrides.get(msgId));
+                    replaceTimestampText(res, customTimeOverrides.get(msgId)!);
                 }));
                 log("Strategy B patch attached on key:", fnKey);
             } catch (e) {
@@ -134,16 +134,18 @@ function patchTimestampRenderer() {
 
     if (fmtModule) {
         const fnKey = Object.keys(fmtModule).find(k =>
-            typeof fmtModule[k] === "function" &&
+            typeof (fmtModule as any)[k] === "function" &&
             ["getMessageTimestamp", "formatTimestamp", "calendarFormat"].includes(k)
         );
         if (fnKey) {
             try {
                 patches.push(instead(fnKey, fmtModule, (args, orig) => {
                     const result = orig(...args);
+                    if (typeof result !== "string") return result;
+
                     for (const [msgId, override] of customTimeOverrides) {
                         const msg = MessageStore.getMessage?.("", msgId);
-                        if (msg && typeof result === "string") {
+                        if (msg) {
                             const formatted = formatTimeForEdit(msg.timestamp);
                             if (result === formatted) {
                                 log("Strategy C matched and overrode:", result, "->", override);
@@ -173,14 +175,14 @@ export default {
                 const unpatch = after("default", instance, (_, res) => {
                     setTimeout(unpatch, 0);
 
-                    const buttons = findInReactTree(res, x => x?.[0]?.type?.name === "ActionSheetRow");
+                    const buttons = findInReactTree(res, (x: any) => x?.[0]?.type?.name === "ActionSheetRow");
                     if (!buttons) return;
 
                     const currentMessage = MessageStore.getMessage(message.channel_id, message.id) ?? message;
-                    if (buttons.some(b => b?.props?.label === "Edit Locally")) return;
+                    if (buttons.some((b: any) => b?.props?.label === "Edit Locally")) return;
 
                     const position = Math.max(
-                        buttons.findIndex(x => x?.props?.message === i18n.Messages.MARK_UNREAD),
+                        buttons.findIndex((x: any) => x?.props?.message === i18n.Messages.MARK_UNREAD),
                         0
                     );
 
@@ -209,7 +211,8 @@ export default {
                     };
 
                     buttons.splice(
-                        position, 0,
+                        position,
+                        0,
                         <ActionSheetRow
                             label="Edit Locally"
                             icon={<ActionSheetRow.Icon source={getAssetIDByName("ic_edit_24px")} />}
@@ -244,38 +247,31 @@ export default {
                     }
 
                     if (editMode === "time") {
-                        customTimeOverrides.set(messageId, message.content);
-                        log("Time override set:", messageId, "->", message.content);
+                        const customText = message.content;
 
-                        const live = MessageStore.getMessage(channelId, messageId) ?? baseMessage;
+                        customTimeOverrides.set(messageId, customText);
 
-                        // PRIMARY FIX: timestamp field ko hi custom text bana do.
-                        // Renderer patch (Strategy A/B/C) bhi saath mein chalega agar mila.
+                        log("================================");
+                        log("EDIT TIME SAVED");
+                        log("Message ID:", messageId);
+                        log("Channel ID:", channelId);
+                        log("Custom text:", customText);
+                        log("Original timestamp:", baseMessage?.timestamp);
+                        log("================================");
+
+                        const live =
+                            MessageStore.getMessage(channelId, messageId) ??
+                            baseMessage;
+
+                        // Original timestamp ko change NAHI karna.
+                        // Bas new message object dispatch karke re-render trigger karna hai.
                         FluxDispatcher.dispatch({
                             type: "MESSAGE_UPDATE",
                             message: {
-                                ...baseMessage,
-                                content: live.content,
-                                edited_timestamp: null,
-                                timestamp: message.content, // 👈 direct override, string ban jayega
+                                ...live,
                             },
                             otherPluginBypass: true,
                         });
-
-                        // FORCE re-render trigger — kai components sirf message object
-                        // reference change pe re-render karte hain
-                        setTimeout(() => {
-                            FluxDispatcher.dispatch({
-                                type: "MESSAGE_UPDATE",
-                                message: {
-                                    ...baseMessage,
-                                    content: live.content,
-                                    edited_timestamp: null,
-                                    timestamp: message.content,
-                                },
-                                otherPluginBypass: true,
-                            });
-                        }, 50);
 
                         editMode = null;
                         activeEditId = null;
