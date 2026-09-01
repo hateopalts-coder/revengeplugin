@@ -1,9 +1,11 @@
+import { registerCommand, unregisterAllCommands } from "@vendetta/commands";
 import { findByProps, findByStoreName, findByDisplayName } from "@vendetta/metro";
 import { FluxDispatcher, i18n } from "@vendetta/metro/common";
 import { before, after, instead } from "@vendetta/patcher";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
 import { findInReactTree } from "@vendetta/utils";
+import { showToast } from "@vendetta/ui/toasts";
 
 const LazyActionSheet = findByProps("openLazy", "hideActionSheet");
 const ActionSheetRow = findByProps("ActionSheetRow")?.ActionSheetRow ?? Forms.FormRow;
@@ -21,8 +23,64 @@ function log(...args: any[]) {
     console.log("[EditTime]", ...args);
 }
 
+// Shared core logic: locally overwrite a message's content via MESSAGE_UPDATE,
+// using the original message as the base so other fields (embeds, attachments,
+// reactions, etc.) stay intact. Used by both the "Edit Locally" action sheet
+// button and the /localedit slash command.
+function applyLocalEdit(channelId: string, messageId: string, newContent: string) {
+    const currentMessage = MessageStore.getMessage(channelId, messageId);
+    if (!currentMessage) return false;
+
+    const baseMessage = edits.get(messageId) ?? JSON.parse(JSON.stringify(currentMessage));
+
+    FluxDispatcher.dispatch({
+        type: "MESSAGE_UPDATE",
+        message: { ...baseMessage, content: newContent, edited_timestamp: null },
+        otherPluginBypass: true,
+    });
+
+    edits.delete(messageId);
+    return true;
+}
+
+const loadCommands = () => {
+    registerCommand({
+        name: "localedit",
+        description: "Locally edit a message's content (only visible to you)",
+        options: [
+            {
+                name: "messageid",
+                description: "The ID of the message to edit",
+                type: 3, // STRING
+                required: true,
+            },
+            {
+                name: "text",
+                description: "The new content to show locally",
+                type: 3, // STRING
+                required: true,
+            },
+        ],
+        execute: (args, ctx) => {
+            const messageId = args.find((a: any) => a.name === "messageid")?.value;
+            const text = args.find((a: any) => a.name === "text")?.value;
+            const channelId = ctx?.channel?.id;
+
+            if (!channelId || !messageId || text === undefined) {
+                showToast("Missing channel, message ID, or text.");
+                return;
+            }
+
+            const success = applyLocalEdit(channelId, messageId, text);
+            showToast(success ? "Message edited locally." : "Message not found in this channel.");
+        },
+    });
+};
+
 export default {
     onLoad() {
+        loadCommands();
+
         patches.push(
             before("openLazy", LazyActionSheet, ([component, key, msg]: any[]) => {
                 const message = msg?.message;
@@ -80,6 +138,7 @@ export default {
                             message: { ...baseMessage, content: message.content, edited_timestamp: null },
                             otherPluginBypass: true,
                         });
+                        edits.delete(messageId);
                         editMode = null;
                         activeEditId = null;
                         return;
@@ -102,6 +161,7 @@ export default {
     },
 
     onUnload() {
+        unregisterAllCommands();
         for (const p of patches) p();
         patches.length = 0;
         edits.clear();
