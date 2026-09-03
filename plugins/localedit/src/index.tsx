@@ -8,6 +8,28 @@ const TAG = "[DoubleTapLocalEdit]";
 const MessageStore = findByStoreName("MessageStore");
 const Messages = findByProps("sendMessage", "startEditMessage", "editMessage");
 
+// Discord only calls handleAddDefaultDoubleTapReaction at all if its own
+// "double-tap to react" setting is turned on. Force it on so our hook
+// actually fires, then we suppress the real reaction ourselves below.
+let reactSettingLatched = false;
+function ensureDoubleTapReactEnabled() {
+    if (reactSettingLatched) return;
+    try {
+        const DTR = findByProps("DoubleTapReactionEmoji")?.DoubleTapReactionEmoji;
+        if (!DTR?.updateSetting) return;
+        const s = DTR?.getSetting?.();
+        DTR.updateSetting({
+            disableDoubleTap: false,
+            emojiId: s?.emojiId ?? null,
+            emojiName: s?.emojiName ?? null,
+            animated: s?.animated ?? null,
+        });
+        reactSettingLatched = true;
+    } catch (e) {
+        console.error(TAG, "ensureDoubleTapReactEnabled error", e);
+    }
+}
+
 // ---------- double-tap detection (from GeasturesPlus) ----------
 
 const DOUBLE_TAP_WINDOW_MS = 300; // time allowed between the two taps that count as "double tap"
@@ -78,9 +100,21 @@ function beginLocalEdit(message: any, channel: any) {
 }
 
 const patches: Array<() => void> = [];
+let enableRetryTimer: ReturnType<typeof setInterval> | undefined;
 
 export default {
     onLoad() {
+        // Force Discord's double-tap-to-react setting on (retry until the
+        // module is available, then stop) so our hook below actually fires.
+        ensureDoubleTapReactEnabled();
+        enableRetryTimer = setInterval(() => {
+            ensureDoubleTapReactEnabled();
+            if (reactSettingLatched && enableRetryTimer) {
+                clearInterval(enableRetryTimer);
+                enableRetryTimer = undefined;
+            }
+        }, 1000);
+
         // Hook the same native double-tap signal GeasturesPlus used.
         const exps = findByProps("handleAddDefaultDoubleTapReaction") as any;
         if (typeof exps?.handleAddDefaultDoubleTapReaction === "function") {
@@ -138,6 +172,8 @@ export default {
     },
 
     onUnload() {
+        if (enableRetryTimer) clearInterval(enableRetryTimer);
+        enableRetryTimer = undefined;
         for (const p of patches) p();
         patches.length = 0;
         clearPending();
