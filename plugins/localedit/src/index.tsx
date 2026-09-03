@@ -8,13 +8,15 @@ const TAG = "[DoubleTapLocalEdit]";
 const MessageStore = findByStoreName("MessageStore");
 const Messages = findByProps("sendMessage", "startEditMessage", "editMessage");
 
-// Discord only calls handleAddDefaultDoubleTapReaction at all if its own
-// "double-tap to react" setting is turned on. Force it on so our hook
-// actually fires, then we suppress the real reaction ourselves below.
-let reactSettingLatched = false;
-function ensureDoubleTapReactEnabled() {
-    if (reactSettingLatched) return;
+// ---------------------------------------------------------------------
+// enable(): from GeasturesPlus. Forces Discord's native double-tap-to-react
+// setting ON so that handleAddDefaultDoubleTapReaction actually fires on
+// every double-tap. Without this, the hook below never gets called.
+// ---------------------------------------------------------------------
+let reactLatched = false;
+function enable() {
     try {
+        if (reactLatched) return;
         const DTR = findByProps("DoubleTapReactionEmoji")?.DoubleTapReactionEmoji;
         if (!DTR?.updateSetting) return;
         const s = DTR?.getSetting?.();
@@ -24,15 +26,19 @@ function ensureDoubleTapReactEnabled() {
             emojiName: s?.emojiName ?? null,
             animated: s?.animated ?? null,
         });
-        reactSettingLatched = true;
+        reactLatched = true;
     } catch (e) {
-        console.error(TAG, "ensureDoubleTapReactEnabled error", e);
+        console.error(TAG, "enable error", e);
     }
 }
 
-// ---------- double-tap detection (from GeasturesPlus) ----------
-
-const DOUBLE_TAP_WINDOW_MS = 300; // time allowed between the two taps that count as "double tap"
+// ---------------------------------------------------------------------
+// Double-tap detection: exact logic from the detection.ts you provided,
+// minus the triple-tap-delete and reply branches (not needed here).
+// Two taps on the SAME message id within DOUBLE_TAP_WINDOW_MS = a double
+// tap -> start a local edit.
+// ---------------------------------------------------------------------
+const DOUBLE_TAP_WINDOW_MS = 300;
 
 let pendingId: string | null = null;
 let pendingMessage: any = null;
@@ -47,14 +53,9 @@ function clearPending() {
     pendingChannel = null;
 }
 
-// Call this from wherever your tap gesture is detected (e.g. the same hook
-// GeasturesPlus used: handleAddDefaultDoubleTapReaction), passing the message
-// and channel Discord gives you. Two taps on the SAME message within the
-// window = a double tap -> start a local edit.
 function onDoubleTap(message: any, channel: any) {
     if (!message) return;
     const id = message.id;
-
     const isSecondTap = pendingId !== null && pendingId === id;
 
     if (isSecondTap) {
@@ -70,15 +71,24 @@ function onDoubleTap(message: any, channel: any) {
     windowTimer = setTimeout(clearPending, DOUBLE_TAP_WINDOW_MS);
 }
 
-// ---------- local edit logic (from EditTime) ----------
+function resetDetection() {
+    clearPending();
+}
 
+// ---------------------------------------------------------------------
+// Local edit logic: exact logic from the EditTime plugin you provided
+// (applyLocalEdit / editMessage instead-patch / endEditMessage cleanup),
+// just triggered by double-tap instead of a long-press menu button.
+// Works on ANY message, own or not.
+// ---------------------------------------------------------------------
 const edits = new Map<string, any>();
 let editMode: "content" | null = null;
 let activeEditId: string | null = null;
 let isStartingEdit = false;
 
 function beginLocalEdit(message: any, channel: any) {
-    const currentMessage = MessageStore?.getMessage?.(channel?.id ?? message.channel_id, message.id) ?? message;
+    const channelId = channel?.id ?? message.channel_id;
+    const currentMessage = MessageStore?.getMessage?.(channelId, message.id) ?? message;
     if (!currentMessage) return;
 
     editMode = "content";
@@ -99,44 +109,50 @@ function beginLocalEdit(message: any, channel: any) {
     }
 }
 
-const patches: Array<() => void> = [];
-let enableRetryTimer: ReturnType<typeof setInterval> | undefined;
+const patches: (() => void)[] = [];
+let retryTimer: ReturnType<typeof setInterval> | undefined;
+
+function tryPatchReaction(): boolean {
+    const exps = findByProps("handleAddDefaultDoubleTapReaction") as any;
+    if (typeof exps?.handleAddDefaultDoubleTapReaction !== "function") return false;
+
+    patches.push(
+        instead("handleAddDefaultDoubleTapReaction", exps, (args: any[]) => {
+            try {
+                onDoubleTap(args[0], args[1]);
+            } catch (e) {
+                console.error(TAG, "double-tap hook error", e);
+            }
+            return undefined; // suppress the default reaction so it never fires
+        }),
+    );
+    return true;
+}
 
 export default {
     onLoad() {
-        // Force Discord's double-tap-to-react setting on (retry until the
-        // module is available, then stop) so our hook below actually fires.
-        ensureDoubleTapReactEnabled();
-        enableRetryTimer = setInterval(() => {
-            ensureDoubleTapReactEnabled();
-            if (reactSettingLatched && enableRetryTimer) {
-                clearInterval(enableRetryTimer);
-                enableRetryTimer = undefined;
-            }
-        }, 1000);
+        enable();
+        const patched = tryPatchReaction();
 
-        // Hook the same native double-tap signal GeasturesPlus used.
-        const exps = findByProps("handleAddDefaultDoubleTapReaction") as any;
-        if (typeof exps?.handleAddDefaultDoubleTapReaction === "function") {
-            patches.push(
-                instead("handleAddDefaultDoubleTapReaction", exps, (args: any[]) => {
-                    try {
-                        onDoubleTap(args[0], args[1]);
-                    } catch (e) {
-                        console.error(TAG, "double-tap hook error", e);
-                    }
-                    return undefined; // suppress the default reaction
-                }),
-            );
-        } else {
-            console.error(TAG, "handleAddDefaultDoubleTapReaction not found");
+        // Retry until both the setting-enable and the hook attach succeed
+        // (modules can load slightly after plugin onLoad on some clients).
+        if (!patched || !reactLatched) {
+            retryTimer = setInterval(() => {
+                enable();
+                if (!patches.length) tryPatchReaction();
+                if (reactLatched && patches.length) {
+                    if (retryTimer) clearInterval(retryTimer);
+                    retryTimer = undefined;
+                }
+            }, 1000);
         }
 
         // Intercept the real editMessage call and, if we're in a local-edit
-        // session, rewrite the message locally instead of hitting the API.
+        // session, rewrite the message locally (MESSAGE_UPDATE dispatch)
+        // instead of sending a real edit to Discord's API.
         patches.push(
             instead("editMessage", Messages, (args: any[], orig: (...a: any[]) => any) => {
-                const [channelId, messageId, message] = args;
+                const [, messageId, message] = args;
 
                 if (editMode === "content" && activeEditId === messageId) {
                     const baseMessage = edits.get(messageId);
@@ -157,8 +173,8 @@ export default {
             }),
         );
 
-        // Clean up edit-mode state if the user backs out of the edit box
-        // without sending (e.g. taps the X / presses back).
+        // If the user backs out of the edit box without sending, clear
+        // edit-mode state so a stray editMessage call later doesn't misfire.
         patches.push(
             instead("endEditMessage", Messages, (args: any[], orig: (...a: any[]) => any) => {
                 const result = orig(...args);
@@ -172,11 +188,11 @@ export default {
     },
 
     onUnload() {
-        if (enableRetryTimer) clearInterval(enableRetryTimer);
-        enableRetryTimer = undefined;
+        if (retryTimer) clearInterval(retryTimer);
+        retryTimer = undefined;
         for (const p of patches) p();
         patches.length = 0;
-        clearPending();
+        resetDetection();
         edits.clear();
         editMode = null;
         activeEditId = null;
