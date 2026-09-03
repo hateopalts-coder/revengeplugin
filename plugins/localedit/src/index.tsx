@@ -1,137 +1,111 @@
-import { registerCommand, unregisterAllCommands } from "@vendetta/commands";
-import { findByProps, findByStoreName, findByDisplayName } from "@vendetta/metro";
-import { FluxDispatcher, i18n } from "@vendetta/metro/common";
-import { before, after, instead } from "@vendetta/patcher";
-import { getAssetIDByName } from "@vendetta/ui/assets";
-import { Forms } from "@vendetta/ui/components";
-import { findInReactTree } from "@vendetta/utils";
+import { findByProps, findByStoreName } from "@vendetta/metro";
+import { FluxDispatcher } from "@vendetta/metro/common";
+import { instead } from "@vendetta/patcher";
 import { showToast } from "@vendetta/ui/toasts";
 
-const LazyActionSheet = findByProps("openLazy", "hideActionSheet");
-const ActionSheetRow = findByProps("ActionSheetRow")?.ActionSheetRow ?? Forms.FormRow;
+const TAG = "[DoubleTapLocalEdit]";
+
 const MessageStore = findByStoreName("MessageStore");
 const Messages = findByProps("sendMessage", "startEditMessage", "editMessage");
 
-const edits = new Map();
+// ---------- double-tap detection (from GeasturesPlus) ----------
+
+const DOUBLE_TAP_WINDOW_MS = 300; // time allowed between the two taps that count as "double tap"
+
+let pendingId: string | null = null;
+let pendingMessage: any = null;
+let pendingChannel: any = null;
+let windowTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPending() {
+    if (windowTimer) clearTimeout(windowTimer);
+    windowTimer = null;
+    pendingId = null;
+    pendingMessage = null;
+    pendingChannel = null;
+}
+
+// Call this from wherever your tap gesture is detected (e.g. the same hook
+// GeasturesPlus used: handleAddDefaultDoubleTapReaction), passing the message
+// and channel Discord gives you. Two taps on the SAME message within the
+// window = a double tap -> start a local edit.
+function onDoubleTap(message: any, channel: any) {
+    if (!message) return;
+    const id = message.id;
+
+    const isSecondTap = pendingId !== null && pendingId === id;
+
+    if (isSecondTap) {
+        clearPending();
+        beginLocalEdit(message, channel);
+        return;
+    }
+
+    if (pendingId !== null) clearPending();
+    pendingId = id;
+    pendingMessage = message;
+    pendingChannel = channel;
+    windowTimer = setTimeout(clearPending, DOUBLE_TAP_WINDOW_MS);
+}
+
+// ---------- local edit logic (from EditTime) ----------
+
+const edits = new Map<string, any>();
 let editMode: "content" | null = null;
 let activeEditId: string | null = null;
 let isStartingEdit = false;
 
+function beginLocalEdit(message: any, channel: any) {
+    const currentMessage = MessageStore?.getMessage?.(channel?.id ?? message.channel_id, message.id) ?? message;
+    if (!currentMessage) return;
+
+    editMode = "content";
+    activeEditId = currentMessage.id;
+    edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
+
+    try {
+        isStartingEdit = true;
+        Messages.startEditMessage(currentMessage.channel_id, currentMessage.id, currentMessage.content);
+    } catch (e) {
+        console.error(TAG, "startEditMessage failed", e);
+        showToast("Couldn't start local edit.");
+        edits.delete(currentMessage.id);
+        editMode = null;
+        activeEditId = null;
+    } finally {
+        isStartingEdit = false;
+    }
+}
+
 const patches: Array<() => void> = [];
-
-function log(...args: any[]) {
-    console.log("[EditTime]", ...args);
-}
-
-// Shared core logic: locally overwrite a message's content via MESSAGE_UPDATE,
-// using the original message as the base so other fields (embeds, attachments,
-// reactions, etc.) stay intact. Used by both the "Edit Locally" action sheet
-// button and the /localedit slash command.
-function applyLocalEdit(channelId: string, messageId: string, newContent: string) {
-    const currentMessage = MessageStore.getMessage(channelId, messageId);
-    if (!currentMessage) return false;
-
-    const baseMessage = edits.get(messageId) ?? JSON.parse(JSON.stringify(currentMessage));
-
-    FluxDispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: { ...baseMessage, content: newContent, edited_timestamp: null },
-        otherPluginBypass: true,
-    });
-
-    edits.delete(messageId);
-    return true;
-}
-
-const loadCommands = () => {
-    registerCommand({
-        name: "localedit",
-        description: "Locally edit a message's content (only visible to you)",
-        options: [
-            {
-                name: "messageid",
-                description: "The ID of the message to edit",
-                type: 3, // STRING
-                required: true,
-            },
-            {
-                name: "text",
-                description: "The new content to show locally",
-                type: 3, // STRING
-                required: true,
-            },
-        ],
-        execute: (args, ctx) => {
-            const messageId = args.find((a: any) => a.name === "messageid")?.value;
-            const text = args.find((a: any) => a.name === "text")?.value;
-            const channelId = ctx?.channel?.id;
-
-            if (!channelId || !messageId || text === undefined) {
-                showToast("Missing channel, message ID, or text.");
-                return;
-            }
-
-            const success = applyLocalEdit(channelId, messageId, text);
-            showToast(success ? "Message edited locally." : "Message not found in this channel.");
-        },
-    });
-};
 
 export default {
     onLoad() {
-        loadCommands();
+        // Hook the same native double-tap signal GeasturesPlus used.
+        const exps = findByProps("handleAddDefaultDoubleTapReaction") as any;
+        if (typeof exps?.handleAddDefaultDoubleTapReaction === "function") {
+            patches.push(
+                instead("handleAddDefaultDoubleTapReaction", exps, (args: any[]) => {
+                    try {
+                        onDoubleTap(args[0], args[1]);
+                    } catch (e) {
+                        console.error(TAG, "double-tap hook error", e);
+                    }
+                    return undefined; // suppress the default reaction
+                }),
+            );
+        } else {
+            console.error(TAG, "handleAddDefaultDoubleTapReaction not found");
+        }
 
-        patches.push(
-            before("openLazy", LazyActionSheet, ([component, key, msg]: any[]) => {
-                const message = msg?.message;
-                if (key !== "MessageLongPressActionSheet" || !message) return;
-
-                component.then((instance: any) => {
-                    const unpatch = after("default", instance, (_: any, res: any) => {
-                        setTimeout(unpatch, 0);
-
-                        const buttons = findInReactTree(res, (x: any) => x?.[0]?.type?.name === "ActionSheetRow");
-                        if (!buttons) return;
-
-                        const currentMessage = MessageStore.getMessage(message.channel_id, message.id) ?? message;
-                        if (buttons.some((b: any) => b?.props?.label === "Edit Locally")) return;
-
-                        const position = Math.max(
-                            buttons.findIndex((x: any) => x?.props?.message === i18n.Messages.MARK_UNREAD),
-                            0
-                        );
-
-                        const handleEditContent = () => {
-                            editMode = "content";
-                            activeEditId = currentMessage.id;
-                            edits.set(currentMessage.id, JSON.parse(JSON.stringify(currentMessage)));
-                            LazyActionSheet.hideActionSheet();
-                            isStartingEdit = true;
-                            Messages.startEditMessage(currentMessage.channel_id, currentMessage.id, currentMessage.content);
-                            isStartingEdit = false;
-                        };
-
-                        buttons.splice(
-                            position,
-                            0,
-                            <ActionSheetRow
-                                label="Edit Locally"
-                                icon={<ActionSheetRow.Icon source={getAssetIDByName("ic_edit_24px")} />}
-                                onPress={handleEditContent}
-                            />
-                        );
-                    });
-                });
-            })
-        );
-
+        // Intercept the real editMessage call and, if we're in a local-edit
+        // session, rewrite the message locally instead of hitting the API.
         patches.push(
             instead("editMessage", Messages, (args: any[], orig: (...a: any[]) => any) => {
                 const [channelId, messageId, message] = args;
 
                 if (editMode === "content" && activeEditId === messageId) {
                     const baseMessage = edits.get(messageId);
-
                     if (baseMessage) {
                         FluxDispatcher.dispatch({
                             type: "MESSAGE_UPDATE",
@@ -146,24 +120,27 @@ export default {
                 }
 
                 return orig(...args);
-            })
+            }),
         );
 
+        // Clean up edit-mode state if the user backs out of the edit box
+        // without sending (e.g. taps the X / presses back).
         patches.push(
-            after("endEditMessage", Messages, () => {
-                if (isStartingEdit) return;
-                if (editMode !== null) {
+            instead("endEditMessage", Messages, (args: any[], orig: (...a: any[]) => any) => {
+                const result = orig(...args);
+                if (!isStartingEdit && editMode !== null) {
                     editMode = null;
                     activeEditId = null;
                 }
-            })
+                return result;
+            }),
         );
     },
 
     onUnload() {
-        unregisterAllCommands();
         for (const p of patches) p();
         patches.length = 0;
+        clearPending();
         edits.clear();
         editMode = null;
         activeEditId = null;
