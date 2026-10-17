@@ -1,14 +1,7 @@
 {
   "name": "Local Edit",
-  "description": "Edit messages locally.",
-  "authors": [
-    {
-      "name": "シグマ siguma",
-      "id": "737597276339437578"
-    }
-  ],
+  "description": "Edit any message locally. Only you can see the change.",
+  "authors": [{ "name": "Omkur" }],
   "main": "src/index.tsx",
-  "vendetta": {
-    "icon": "ic_edit_24px"
-  }
+  "vendetta": { "icon": "ic_edit_24px" }
 }
